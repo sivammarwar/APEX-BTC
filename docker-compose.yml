@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: apex-btc-postgres
+    environment:
+      POSTGRES_USER: apex
+      POSTGRES_PASSWORD: apex
+      POSTGRES_DB: apex_btc
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apex"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: apex-btc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # InfluxDB for Time-Series Data
+  influxdb:
+    image: influxdb:2.7
+    container_name: apex-btc-influxdb
+    environment:
+      INFLUXDB_DB: market_data
+      INFLUXDB_ADMIN_USER: admin
+      INFLUXDB_ADMIN_PASSWORD: adminpassword
+      INFLUXDB_HTTP_AUTH_ENABLED: "true"
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+
+  # Backend API & Trading Engine
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: apex-btc-backend
+    environment:
+      - DATABASE_URL=postgresql://apex:apex@postgres:5432/apex_btc
+      - REDIS_URL=redis://redis:6379/0
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=admintoken
+      - INFLUXDB_ORG=apex
+      - INFLUXDB_BUCKET=market_data
+      - BINANCE_TESTNET=true
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+      - ./models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      influxdb:
+        condition: service_started
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend React App
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: apex-btc-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000/ws
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  influxdb_data:
